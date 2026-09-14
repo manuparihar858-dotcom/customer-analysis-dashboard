@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import numpy as np
+import plotly.express as px
 
 st.set_page_config(
     page_title="Customer Analysis Dashboard",
@@ -9,217 +9,486 @@ st.set_page_config(
     layout="wide"
 )
 
-@st.cache_data
-def create_sample_data():
-    rng = np.random.default_rng(42)
-    n = 1200
 
-    regions = rng.choice(
-        ["North", "South", "East", "West"], n, p=[0.28, 0.24, 0.22, 0.26]
-    )
-    ages = rng.integers(18, 71, n)
-    segments = rng.choice(
-        ["High Value", "Regular", "Low Value"], n, p=[0.22, 0.53, 0.25]
-    )
-    orders = np.array([
-        rng.integers(6, 13) if s == "High Value"
-        else rng.integers(3, 8) if s == "Regular"
-        else rng.integers(1, 4)
-        for s in segments
-    ])
-    avg_order = rng.integers(650, 1900, n)
-    sales = orders * avg_order
-    months = rng.choice(
-        ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], n
-    )
+def create_sample_data():
+    np.random.seed(42)
+
+    regions = ["North", "South", "East", "West"]
+    segments = ["Premium", "Regular", "Basic"]
+
+    n = 1000
 
     df = pd.DataFrame({
-        "Customer ID": [f"C{i+1:04d}" for i in range(n)],
-        "Region": regions,
-        "Age": ages,
-        "Segment": segments,
-        "Orders": orders,
-        "Sales": sales,
-        "Month": months
+        "Customer ID": range(10001, 10001 + n),
+        "Region": np.random.choice(regions, n),
+        "Customer Segment": np.random.choice(
+            segments,
+            n,
+            p=[0.25, 0.50, 0.25]
+        ),
+        "Age": np.random.randint(18, 65, n),
+        "Orders": np.random.randint(1, 15, n),
+        "Sales": np.random.uniform(500, 15000, n).round(2),
+        "Order Date": pd.date_range(
+            start="2024-01-01",
+            periods=n,
+            freq="12h"
+        )
     })
 
-    age_bins = [17, 25, 35, 45, 55, 70]
-    age_labels = ["18–25", "26–35", "36–45", "46–55", "56–70"]
-    df["Age Group"] = pd.cut(
-        df["Age"], bins=age_bins, labels=age_labels, include_lowest=True
-    )
     return df
 
 
-def prepare_uploaded_data(uploaded_file):
-    if uploaded_file.name.lower().endswith(".csv"):
+def read_uploaded_file(uploaded_file):
+    file_name = uploaded_file.name.lower()
+
+    if file_name.endswith(".csv"):
         return pd.read_csv(uploaded_file)
 
-    return pd.read_excel(uploaded_file)
+    if file_name.endswith((".xlsx", ".xls")):
+        return pd.read_excel(uploaded_file)
+
+    return None
 
 
 def standardize_columns(df):
-    result = df.copy()
-    result.columns = [
-        str(c).strip().replace("_", " ").replace("-", " ")
-        for c in result.columns
-    ]
-    return result
+    df = df.copy()
+
+    df.columns = (
+        df.columns
+        .str.strip()
+        .str.replace("_", " ", regex=False)
+        .str.replace("-", " ", regex=False)
+    )
+
+    return df
 
 
-st.markdown("""
-<style>
-.block-container {padding-top: 1.5rem; padding-bottom: 2rem;}
-.dashboard-title {font-size: 2rem; font-weight: 800; margin-bottom: 0;}
-.dashboard-subtitle {color: #64748b; margin-top: .2rem; margin-bottom: 1rem;}
-div[data-testid="stMetric"] {
-    background: white; border: 1px solid #e2e8f0;
-    border-radius: 12px; padding: 12px;
-}
-</style>
-""", unsafe_allow_html=True)
+def find_column(df, possible_names):
+    normalized = {
+        str(col).strip().lower(): col
+        for col in df.columns
+    }
 
-st.markdown(
-    '<div class="dashboard-title">CUSTOMER ANALYSIS DASHBOARD</div>',
-    unsafe_allow_html=True
-)
-st.markdown(
-    '<div class="dashboard-subtitle">Customer behavior, sales performance and value segmentation</div>',
-    unsafe_allow_html=True
+    for name in possible_names:
+        if name.lower() in normalized:
+            return normalized[name.lower()]
+
+    return None
+
+
+st.title("Customer Analysis & Sales Dashboard")
+st.caption(
+    "Analyze customer behavior, sales performance, segments and regional trends."
 )
 
 st.sidebar.header("Data Source")
+
 source = st.sidebar.radio(
     "Choose data",
     ["Use sample data", "Upload CSV / Excel"]
 )
 
-if source == "Upload CSV / Excel":
-    uploaded = st.sidebar.file_uploader(
+if source == "Use sample data":
+    df = create_sample_data()
+
+else:
+    uploaded_file = st.sidebar.file_uploader(
         "Upload your dataset",
-        type=["csv", "xlsx", "xls"],
-        help="For best results, include columns such as Region, Segment, Orders and Sales."
+        type=["csv", "xlsx", "xls"]
     )
 
-    if uploaded is None:
-        st.info("Upload a CSV or Excel file from the sidebar to analyze your own data.")
-        st.caption("You can also choose 'Use sample data' to preview the dashboard.")
+    if uploaded_file is None:
+        st.info("Upload a CSV or Excel file to start the analysis.")
         st.stop()
 
     try:
-        df = standardize_columns(prepare_uploaded_data(uploaded))
+        df = read_uploaded_file(uploaded_file)
+
+        if df is None:
+            st.error("Unsupported file format.")
+            st.stop()
+
+        df = standardize_columns(df)
+
     except Exception as e:
-        st.error(f"Could not read the uploaded file: {e}")
+        st.error(f"Could not read the file: {e}")
         st.stop()
 
-    st.success(f"Loaded {len(df):,} rows from {uploaded.name}")
-else:
-    df = create_sample_data()
-    st.sidebar.caption("Using simulated portfolio data.")
 
-# Try to identify common column names
-lower_map = {str(c).lower(): c for c in df.columns}
+region_col = find_column(
+    df,
+    ["Region", "Area", "Location"]
+)
 
-def find_col(names):
-    for name in names:
-        if name.lower() in lower_map:
-            return lower_map[name.lower()]
-    return None
+segment_col = find_column(
+    df,
+    ["Customer Segment", "Segment", "Category"]
+)
 
-region_col = find_col(["Region", "Area", "Location"])
-segment_col = find_col(["Segment", "Customer Segment", "Category"])
-orders_col = find_col(["Orders", "Order Count", "Order Quantity"])
-sales_col = find_col(["Sales", "Revenue", "Sales Amount", "Amount"])
-age_col = find_col(["Age"])
+orders_col = find_column(
+    df,
+    ["Orders", "Order Count", "Order Quantity"]
+)
 
-st.sidebar.header("Dashboard Filters")
+sales_col = find_column(
+    df,
+    ["Sales", "Revenue", "Sales Amount", "Amount"]
+)
+
+age_col = find_column(
+    df,
+    ["Age", "Customer Age"]
+)
+
+date_col = find_column(
+    df,
+    ["Order Date", "Date", "Purchase Date"]
+)
+
+
+st.sidebar.header("Filters")
+
+filtered_df = df.copy()
 
 if region_col:
-    region_options = ["All"] + sorted(df[region_col].dropna().astype(str).unique().tolist())
-    region = st.sidebar.selectbox("Region", region_options)
-else:
-    region = "All"
+    regions = sorted(
+        filtered_df[region_col]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+
+    selected_regions = st.sidebar.multiselect(
+        "Region",
+        regions,
+        default=regions
+    )
+
+    filtered_df = filtered_df[
+        filtered_df[region_col].astype(str).isin(selected_regions)
+    ]
 
 if segment_col:
-    segment_options = ["All"] + sorted(df[segment_col].dropna().astype(str).unique().tolist())
-    segment = st.sidebar.selectbox("Customer Segment", segment_options)
+    segments = sorted(
+        filtered_df[segment_col]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
+
+    selected_segments = st.sidebar.multiselect(
+        "Customer Segment",
+        segments,
+        default=segments
+    )
+
+    filtered_df = filtered_df[
+        filtered_df[segment_col].astype(str).isin(selected_segments)
+    ]
+
+
+if age_col:
+    age_values = pd.to_numeric(
+        filtered_df[age_col],
+        errors="coerce"
+    ).dropna()
+
+    if not age_values.empty:
+        min_age = int(age_values.min())
+        max_age = int(age_values.max())
+
+        if min_age < max_age:
+            selected_age = st.sidebar.slider(
+                "Age Range",
+                min_age,
+                max_age,
+                (min_age, max_age)
+            )
+
+            filtered_df = filtered_df[
+                pd.to_numeric(
+                    filtered_df[age_col],
+                    errors="coerce"
+                ).between(
+                    selected_age[0],
+                    selected_age[1]
+                )
+            ]
+
+
+st.subheader("Key Performance Indicators")
+
+kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+
+total_records = len(filtered_df)
+
+if orders_col:
+    total_orders = pd.to_numeric(
+        filtered_df[orders_col],
+        errors="coerce"
+    ).fillna(0).sum()
 else:
-    segment = "All"
+    total_orders = 0
 
-filtered = df.copy()
+if sales_col:
+    sales_values = pd.to_numeric(
+        filtered_df[sales_col],
+        errors="coerce"
+    ).fillna(0)
 
-if region != "All" and region_col:
-    filtered = filtered[filtered[region_col].astype(str) == region]
+    total_sales = sales_values.sum()
 
-if segment != "All" and segment_col:
-    filtered = filtered[filtered[segment_col].astype(str) == segment]
+    if total_orders > 0:
+        average_order_value = total_sales / total_orders
+    else:
+        average_order_value = 0
+else:
+    total_sales = 0
+    average_order_value = 0
 
-sales_value = (
-    pd.to_numeric(filtered[sales_col], errors="coerce").fillna(0).sum()
-    if sales_col else 0
+
+kpi1.metric(
+    "Total Customers / Records",
+    f"{total_records:,}"
 )
-orders_value = (
-    pd.to_numeric(filtered[orders_col], errors="coerce").fillna(0).sum()
-    if orders_col else len(filtered)
-)
-aov = sales_value / orders_value if orders_value else 0
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total Records", f"{len(filtered):,}")
-c2.metric("Total Orders", f"{orders_value:,.0f}")
-c3.metric("Total Sales", f"₹{sales_value:,.0f}")
-c4.metric("Average Order Value", f"₹{aov:,.0f}")
+kpi2.metric(
+    "Total Orders",
+    f"{total_orders:,.0f}"
+)
+
+kpi3.metric(
+    "Total Sales",
+    f"₹{total_sales:,.2f}"
+)
+
+kpi4.metric(
+    "Average Order Value",
+    f"₹{average_order_value:,.2f}"
+)
+
 
 st.divider()
 
-if not sales_col:
-    st.warning("No Sales/Revenue column was detected. Add a column named Sales, Revenue, Sales Amount, or Amount for sales charts.")
+col1, col2 = st.columns(2)
 
-left, right = st.columns([1.25, 1])
-
-with left:
+with col1:
     st.subheader("Sales by Region")
+
     if region_col and sales_col:
-        region_sales = filtered.copy()
-        region_sales["_sales"] = pd.to_numeric(
-            region_sales[sales_col], errors="coerce"
-        ).fillna(0)
         region_sales = (
-            region_sales.groupby(region_col, as_index=False)["_sales"]
+            filtered_df
+            .assign(
+                _sales=pd.to_numeric(
+                    filtered_df[sales_col],
+                    errors="coerce"
+                ).fillna(0)
+            )
+            .groupby(region_col)["_sales"]
             .sum()
-            .sort_values("_sales", ascending=False)
+            .reset_index()
         )
+
         fig = px.bar(
-            region_sales, x=region_col, y="_sales", text="_sales",
-            template="plotly_white",
-            labels={"_sales": "Sales (₹)", region_col: ""}
+            region_sales,
+            x=region_col,
+            y="_sales",
+            title="Sales Performance by Region",
+            labels={"_sales": "Sales"}
         )
-        fig.update_traces(texttemplate="₹%{text:,.0f}", textposition="outside")
-        fig.update_layout(height=390, margin=dict(l=10, r=10, t=20, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("A Region and Sales column are needed for this chart.")
 
-with right:
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+
+    else:
+        st.warning(
+            "Region and Sales columns are required for this chart."
+        )
+
+
+with col2:
     st.subheader("Customer Segments")
-    if segment_col and sales_col:
-        seg = filtered.copy()
-        seg["_sales"] = pd.to_numeric(seg[sales_col], errors="coerce").fillna(0)
-        seg = seg.groupby(segment_col, as_index=False)["_sales"].sum()
-        fig = px.pie(
-            seg, names=segment_col, values="_sales", hole=.58,
-            template="plotly_white"
-        )
-        fig.update_layout(height=390, margin=dict(l=10, r=10, t=20, b=10))
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("A Segment and Sales column are needed for this chart.")
 
-st.subheader("Data Preview")
-st.dataframe(filtered.head(100), use_container_width=True, hide_index=True, height=360)
+    if segment_col:
+        segment_count = (
+            filtered_df[segment_col]
+            .value_counts()
+            .reset_index()
+        )
+
+        segment_count.columns = [
+            segment_col,
+            "Customers"
+        ]
+
+        fig = px.pie(
+            segment_count,
+            names=segment_col,
+            values="Customers",
+            title="Customer Segment Distribution"
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+
+    else:
+        st.warning(
+            "A Customer Segment column is required for this chart."
+        )
+
+
+st.subheader("Monthly Sales Trend")
+
+if date_col and sales_col:
+    trend_df = filtered_df.copy()
+
+    trend_df[date_col] = pd.to_datetime(
+        trend_df[date_col],
+        errors="coerce"
+    )
+
+    trend_df[sales_col] = pd.to_numeric(
+        trend_df[sales_col],
+        errors="coerce"
+    )
+
+    trend_df = trend_df.dropna(
+        subset=[date_col, sales_col]
+    )
+
+    if not trend_df.empty:
+        trend_df["Month"] = (
+            trend_df[date_col]
+            .dt.to_period("M")
+            .astype(str)
+        )
+
+        monthly_sales = (
+            trend_df
+            .groupby("Month")[sales_col]
+            .sum()
+            .reset_index()
+        )
+
+        fig = px.line(
+            monthly_sales,
+            x="Month",
+            y=sales_col,
+            markers=True,
+            title="Monthly Sales Trend"
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+
+    else:
+        st.warning(
+            "Valid date and sales data are required."
+        )
+
+else:
+    st.info(
+        "Upload data containing Date and Sales columns "
+        "to view the monthly sales trend."
+    )
+
+
+st.subheader("Sales by Age Group")
+
+if age_col and sales_col:
+    age_df = filtered_df.copy()
+
+    age_df[age_col] = pd.to_numeric(
+        age_df[age_col],
+        errors="coerce"
+    )
+
+    age_df[sales_col] = pd.to_numeric(
+        age_df[sales_col],
+        errors="coerce"
+    )
+
+    age_df = age_df.dropna(
+        subset=[age_col, sales_col]
+    )
+
+    if not age_df.empty:
+        age_df["Age Group"] = pd.cut(
+            age_df[age_col],
+            bins=[0, 25, 35, 45, 55, 100],
+            labels=[
+                "18-25",
+                "26-35",
+                "36-45",
+                "46-55",
+                "56+"
+            ]
+        )
+
+        age_sales = (
+            age_df
+            .groupby("Age Group", observed=False)[sales_col]
+            .sum()
+            .reset_index()
+        )
+
+        fig = px.bar(
+            age_sales,
+            x="Age Group",
+            y=sales_col,
+            title="Sales by Age Group"
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
+
+    else:
+        st.warning("Valid age and sales data are required.")
+
+else:
+    st.info(
+        "Age and Sales columns are required for this analysis."
+    )
+
+
+st.subheader("Filtered Customer Data")
+
+st.dataframe(
+    filtered_df,
+    use_container_width=True,
+    height=400
+)
+
+
+st.subheader("Data Summary")
+
+summary_col1, summary_col2, summary_col3 = st.columns(3)
+
+summary_col1.metric(
+    "Rows",
+    f"{len(filtered_df):,}"
+)
+
+summary_col2.metric(
+    "Columns",
+    f"{len(filtered_df.columns):,}"
+)
+
+summary_col3.metric(
+    "Missing Values",
+    f"{filtered_df.isna().sum().sum():,}"
+)
+
 
 st.caption(
-    "Portfolio project • Supports CSV and Excel uploads. Sample data is simulated "
-    "for demonstration and does not represent a real client or business."
+    "Data can be analyzed using the sample dataset or your own CSV/Excel file."
 )
